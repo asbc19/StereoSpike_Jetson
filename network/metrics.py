@@ -79,25 +79,7 @@ def log_to_lin_depths(depths_rect_log, Dmax=80, alpha=3.7):
 
 
 def MeanDepthError(predicted, groundtruth, cutoff_distance=float('inf')):
-    """
-    The Mean Depth Error (MDE) is commonly used as a metric to evaluate depth estimation algorithms on MVSEC dataset.
-    It is computed only on non-NaN and non-zero values of the groundtruth depth map
-    """
-    mask = ~torch.isnan(groundtruth) & ~(groundtruth > cutoff_distance)  # True for valid pixels
-    n = torch.count_nonzero(mask)  # number of valid pixels
-    res = predicted - groundtruth  # calculate the residual
-    res[mask == False] = 0  # invalid pixels: nan --> 0
-
-    MDE = torch.sum(torch.abs(res[mask])) / n
-
     ## Original code
-    # return MDE
-
-    ## Mofication to return more information
-    return MDE, n
-
-# # Original code
-def MeanDepthError_original(predicted, groundtruth, cutoff_distance=float('inf')):
     """
     The Mean Depth Error (MDE) is commonly used as a metric to evaluate depth estimation algorithms on MVSEC dataset.
     It is computed only on non-NaN and non-zero values of the groundtruth depth map
@@ -110,6 +92,22 @@ def MeanDepthError_original(predicted, groundtruth, cutoff_distance=float('inf')
     MDE = torch.sum(torch.abs(res[mask])) / n
 
     return MDE
+
+def MeanDepthError_n(predicted, groundtruth, cutoff_distance=float('inf')):
+    ## Modified to return the number of valid pixels as well
+    """
+    The Mean Depth Error (MDE) is commonly used as a metric to evaluate depth estimation algorithms on MVSEC dataset.
+    It is computed only on non-NaN and non-zero values of the groundtruth depth map
+    """
+    mask = ~torch.isnan(groundtruth) & ~(groundtruth > cutoff_distance)  # True for valid pixels
+    n = torch.count_nonzero(mask)  # number of valid pixels
+    res = predicted - groundtruth  # calculate the residual
+    res[mask == False] = 0  # invalid pixels: nan --> 0
+
+    MDE = torch.sum(torch.abs(res[mask])) / n
+
+    ## Mofication to return more information
+    return MDE, n
 
 
 def OnePixelAccuracy(predicted_disp, groundtruth_disp):
