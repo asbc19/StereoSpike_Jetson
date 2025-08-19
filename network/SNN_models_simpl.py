@@ -8,7 +8,8 @@ import torch
 import torch.nn as nn
 from torch.nn.parameter import Parameter
 
-from spikingjelly.clock_driven import neuron, layer, surrogate
+#from spikingjelly.clock_driven import neuron, layer, surrogate
+from spikingjelly.activation_based import neuron, layer, surrogate
 
 from .blocks import SeparableNNConvUpsampling
 

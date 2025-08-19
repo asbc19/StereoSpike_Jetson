@@ -17,15 +17,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 
-import ipywidgets as widgets
-from IPython.display import display
-
 from tqdm import tqdm
 
 import torch
 from torch.utils.data import DataLoader
 
-from spikingjelly.clock_driven import functional, surrogate, neuron, layer
+#from spikingjelly.clock_driven import functional, surrogate, neuron, layer
+from spikingjelly.activation_based import functional, surrogate, neuron, layer
 
 # StereoSpike Network (Model without skip connections --> Tomo's Modification)
 from network.SNN_models_simpl import Simplified_StereoSpike_NoSkip

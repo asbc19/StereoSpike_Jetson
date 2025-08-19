@@ -5,8 +5,8 @@ import torch.nn.init as init
 from torch import Tensor
 from torch.nn.parameter import Parameter
 
-from spikingjelly.clock_driven import functional, surrogate, neuron, layer, rnn
-
+#from spikingjelly.clock_driven import functional, surrogate, neuron, layer, rnn
+from spikingjelly.activation_based import functional, surrogate, neuron, layer, rnn
 
 ##############
 # ANN BLOCKS #
