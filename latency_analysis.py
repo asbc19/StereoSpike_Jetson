@@ -42,7 +42,8 @@ import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 from torch.utils.data import DataLoader
 
-from spikingjelly.clock_driven import functional, surrogate, neuron, layer
+#from spikingjelly.clock_driven import functional, surrogate, neuron, layer
+from spikingjelly.activation_based import functional, surrogate, neuron, layer
 
 # StereoSpike Network (Model without skip connections --> Tomo's Modification)
 from network.SNN_models_simpl import Simplified_StereoSpike_NoSkip, NeuromorphicNet
@@ -1026,7 +1027,8 @@ def performance_eval_nvidia_smi(
 #################################################################################################################
 
 # Load preprocessed datasets
-test_set = torch.load('./datasets/MVSEC/data/indoor_post/test_set.pt')
+#test_set = torch.load('./datasets/MVSEC/data/indoor_post/test_set.pt')
+test_set = torch.load('./datasets/MVSEC/mini_data/indoor_post/mini_test_set.pt', weights_only=False)
 
 test_data_loader = torch.utils.data.DataLoader(dataset=test_set,
                                                batch_size=1,
