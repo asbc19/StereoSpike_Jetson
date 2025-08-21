@@ -1057,24 +1057,28 @@ def _print_hardware_info_tegrastats(device):
         print("Detected nvidia-smi available: nvidia-smi sampling may be used (non-Jetson).")
     print("===================================\n")
 
-def _tegrastats_sampler(interval_ms: int, samples: list, stop_event: threading.Event):
+def _tegrastats_sampler(interval_ms: int, samples: list, stop_event: threading.Event, debug: bool = False):
     """
-    Spawn tegrastats and append parsed samples to `samples` as tuples
-    (wall_time, power_w, util_pct). Runs until stop_event.is_set().
+    Robust tegrastats sampler.
 
-    - Tries plain 'tegrastats' first (no sudo). If that fails it will attempt 'sudo tegrastats'.
-    - Parses patterns like:
+    - Tries plain 'tegrastats' (no args) first (works on many Jetson boards).
+    - Falls back to '--interval' and 'sudo' variants if needed.
+    - Parses tokens like:
         VDD_GPU_SOC 3595mW/3595mW
         VDD_CPU_CV 399mW/399mW
         VIN_SYS_5V0 4692mW/4692mW
-      and chooses the most appropriate token for a total-power estimate (VIN_SYS_5V0 preferred).
-    - Extracts GPU utilization from tokens like 'GR3D_FREQ 0%' or 'GR3D 12%'.
+      and picks the best estimate for power (VIN_SYS_5V0 preferred).
+    - Extracts GPU util from 'GR3D_FREQ 0%' or any GPU/GR3D percent token.
+    - Appends (wall_ts, power_w, util_pct) to `samples` where power_w is in Watts.
     """
-
-    # candidate invocation patterns: prefer non-sudo since you mentioned tegrastats works without sudo
+    # Prefer to start tegrastats with no args (you said it works without sudo)
     cmds_to_try = [
-        ["tegrastats", str(interval_ms)],
-        ["sudo", "tegrastats", str(interval_ms)]
+        ["tegrastats"],                            # preferred
+        ["tegrastats", "--interval", str(interval_ms)],  # fallback
+        ["tegrastats", str(interval_ms)],          # fallback
+        ["sudo", "tegrastats"],                    # fallback with sudo
+        ["sudo", "tegrastats", "--interval", str(interval_ms)],
+        ["sudo", "tegrastats", str(interval_ms)],
     ]
 
     proc = None
@@ -1082,86 +1086,94 @@ def _tegrastats_sampler(interval_ms: int, samples: list, stop_event: threading.E
         if shutil.which(cmd[0]) is None:
             continue
         try:
+            # text=True to get strings; bufsize=1 for line-buffered
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
+            # give it a short moment to produce output
+            time.sleep(0.05)
+            # if the process immediately exits, skip it
+            if proc.poll() is not None:
+                # no stdout produced and process ended
+                proc = None
+                continue
             break
         except Exception:
             proc = None
             continue
 
     if proc is None:
-        # tegrastats isn't available or failed to start
+        if debug:
+            print("tegrastats: failed to start any invocation.")
         return
 
     # regexes
-    # matches tokens like: LABEL 3595mW/3595mW  or LABEL 3.6W/3.6W
-    power_token_re = re.compile(
-        r'([A-Za-z0-9_]+)\s+([0-9]+(?:\.[0-9]+)?)\s*(mW|W)(?:\/([0-9]+(?:\.[0-9]+)?)\s*(mW|W))?',
-        flags=re.IGNORECASE
-    )
-    # matches GR3D_FREQ 0% or GR3D 12%
-    gpu_util_re = re.compile(r'(?:GR3D[_A-Z]*|GPU[_A-Z]*)\s+(\d+)%', flags=re.IGNORECASE)
-    # fallback to any standalone percentage (careful: CPU core % tokens exist too)
+    # match tokens like: LABEL 3595mW/3595mW  or LABEL 3.6W/3.6W
+    power_token_re = re.compile(r'([A-Za-z0-9_]+)\s+([0-9]+(?:\.[0-9]+)?)\s*(mW|W)', flags=re.IGNORECASE)
+    # match GPU util tokens like: GR3D_FREQ 0% or GR3D 12%
+    gpu_util_re = re.compile(r'(?:GR3D[_A-Z0-9]*|GPU[_A-Z0-9]*)\s+(\d+)%', flags=re.IGNORECASE)
     any_pct_re = re.compile(r'\b(\d+)%\b')
 
+    first_nonempty_logged = False
     try:
         while not stop_event.is_set():
             line = proc.stdout.readline()
             if not line:
-                break
+                # If tegrastats exited or produced no more lines, break
+                if proc.poll() is not None:
+                    break
+                # otherwise continue waiting
+                continue
             txt = line.strip()
             if not txt:
                 continue
-            wall_ts = time.time()
 
-            # find all power tokens
-            found = {}  # label -> power_w (first value before slash converted to W)
+            # debug: log the first few lines to help diagnose format mismatch
+            if debug and not first_nonempty_logged:
+                print("tegrastats sample (first line):", txt)
+                first_nonempty_logged = True
+
+            wall_ts = time.time()
+            # find all power tokens (label + first numeric mW/W)
+            found = {}  # label -> power_w (Watts)
             for m in power_token_re.finditer(txt):
                 label = m.group(1)
-                val1 = m.group(2)
-                unit1 = (m.group(3) or '').lower()
+                val = m.group(2)
+                unit = (m.group(3) or '').lower()
                 try:
-                    v = float(val1)
+                    v = float(val)
                 except Exception:
                     continue
-                power_w = v / 1000.0 if unit1 == 'mw' else v
-                # store first-seen (instantaneous) reading for that label
+                power_w = v / 1000.0 if unit == 'mw' else v
+                # store the first-seen value for that label
                 if label not in found:
                     found[label] = power_w
 
-            # Determine chosen power (prefer VIN_SYS_5V0 as total system input)
+            # choose preferred power
             chosen_power_w = None
             if 'VIN_SYS_5V0' in found:
                 chosen_power_w = found['VIN_SYS_5V0']
             else:
-                # prefer tokens with POM or VDD total-like labels
-                pref_order = ['POM', 'VIN', 'VDD', 'VDD_GPU_SOC', 'VDD_CPU', 'VDD_CPU_CV']
-                # try exact preferred labels first
-                for p in pref_order:
+                # priority: POM*, VIN*, VDD* (including VDD_GPU_SOC), then GPU-labeled tokens
+                pref_keywords = ('POM', 'VIN', 'VDD', 'VDD_GPU_SOC', 'VDD_CPU', 'VDD_CPU_CV')
+                for k in pref_keywords:
                     for lbl, pw in found.items():
-                        if p in lbl.upper():
+                        if k in lbl.upper():
                             chosen_power_w = pw
                             break
                     if chosen_power_w is not None:
                         break
-
-                # if nothing found yet, try GPU-specific power
                 if chosen_power_w is None:
                     for lbl, pw in found.items():
                         if 'GPU' in lbl.upper() or 'GR3D' in lbl.upper():
                             chosen_power_w = pw
                             break
-
-                # fallback: if multiple VDD/VIN tokens, sum them as conservative estimate
                 if chosen_power_w is None and found:
-                    # sum tokens that look like VDD/VIN or include CPU/GPU/SOC keywords
-                    sum_labels = [pw for (lbl, pw) in found.items() if any(k in lbl.upper() for k in ['VDD', 'VIN', 'CPU', 'GPU', 'SOC', 'POM'])]
-                    if sum_labels:
-                        chosen_power_w = sum(sum_labels)
+                    # sum sensible tokens that look like VIN/VDD/CPU/GPU/SOC/POM (conservative)
+                    sum_list = [pw for (lbl, pw) in found.items() if any(k in lbl.upper() for k in ['VDD', 'VIN', 'CPU', 'GPU', 'SOC', 'POM'])]
+                    if sum_list:
+                        chosen_power_w = sum(sum_list)
                     else:
-                        # final fallback: use the single/mode token (first)
-                        # this is conservative but better than nothing
-                        first_pw = next(iter(found.values()))
-                        chosen_power_w = first_pw
+                        # final fallback: first token value
+                        chosen_power_w = next(iter(found.values()))
 
             # GPU utilization parsing
             util_pct = None
@@ -1172,13 +1184,10 @@ def _tegrastats_sampler(interval_ms: int, samples: list, stop_event: threading.E
                 except Exception:
                     util_pct = None
             else:
-                # fallback: if no GR3D/GPU explicit, try any percent but be careful: many percentages are CPU core %
-                # We'll take the first percentage that occurs after 'GR3D' token if present; simple fallback: use first % in line
-                # (This may pick CPU percent; still useful as coarse indicator.)
-                anym = any_pct_re.search(txt)
-                if anym:
+                am = any_pct_re.search(txt)
+                if am:
                     try:
-                        util_pct = float(anym.group(1))
+                        util_pct = float(am.group(1))
                     except Exception:
                         util_pct = None
 
