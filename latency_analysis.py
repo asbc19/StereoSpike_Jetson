@@ -1059,20 +1059,24 @@ def _print_hardware_info_tegrastats(device):
 
 def _tegrastats_sampler(interval_ms: int, samples: list, stop_event: threading.Event):
     """
-    Spawn a subprocess running tegrastats and append parsed samples to `samples` as tuples
+    Spawn tegrastats and append parsed samples to `samples` as tuples
     (wall_time, power_w, util_pct). Runs until stop_event.is_set().
 
-    Heuristics:
-      - Try a few ways to invoke tegrastats (with/without --interval, with sudo).
-      - Parse tokens with 'mW' or 'W' suffix. Prefer labels like 'POM'/'VDD'/'5V' for total power.
-      - Try to extract GPU utilization from 'GR3D' or 'GPU' tokens (percent).
+    - Tries plain 'tegrastats' first (no sudo). If that fails it will attempt 'sudo tegrastats'.
+    - Parses patterns like:
+        VDD_GPU_SOC 3595mW/3595mW
+        VDD_CPU_CV 399mW/399mW
+        VIN_SYS_5V0 4692mW/4692mW
+      and chooses the most appropriate token for a total-power estimate (VIN_SYS_5V0 preferred).
+    - Extracts GPU utilization from tokens like 'GR3D_FREQ 0%' or 'GR3D 12%'.
     """
+
+    # candidate invocation patterns: prefer non-sudo since you mentioned tegrastats works without sudo
     cmds_to_try = [
-        ["tegrastats", "--interval", str(interval_ms)],
         ["tegrastats", str(interval_ms)],
-        ["sudo", "tegrastats", "--interval", str(interval_ms)],
-        ["sudo", "tegrastats", str(interval_ms)],
+        ["sudo", "tegrastats", str(interval_ms)]
     ]
+
     proc = None
     for cmd in cmds_to_try:
         if shutil.which(cmd[0]) is None:
@@ -1080,83 +1084,86 @@ def _tegrastats_sampler(interval_ms: int, samples: list, stop_event: threading.E
         try:
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
             break
-        except FileNotFoundError:
-            proc = None
-            continue
         except Exception:
             proc = None
             continue
 
     if proc is None:
-        # tegrastats not available or couldn't start
+        # tegrastats isn't available or failed to start
         return
 
-    # helper regexes
-    power_re = re.compile(r'([0-9]+(?:\.[0-9]+)?)\s*(mW|W)\b', flags=re.IGNORECASE)
-    gpu_util_re = re.compile(r'\b(?:GR3D|GPU)\b[^,;\n]*?(\d+)%')  # try to capture 'GR3D ... 12%'
+    # regexes
+    # matches tokens like: LABEL 3595mW/3595mW  or LABEL 3.6W/3.6W
+    power_token_re = re.compile(
+        r'([A-Za-z0-9_]+)\s+([0-9]+(?:\.[0-9]+)?)\s*(mW|W)(?:\/([0-9]+(?:\.[0-9]+)?)\s*(mW|W))?',
+        flags=re.IGNORECASE
+    )
+    # matches GR3D_FREQ 0% or GR3D 12%
+    gpu_util_re = re.compile(r'(?:GR3D[_A-Z]*|GPU[_A-Z]*)\s+(\d+)%', flags=re.IGNORECASE)
+    # fallback to any standalone percentage (careful: CPU core % tokens exist too)
+    any_pct_re = re.compile(r'\b(\d+)%\b')
 
     try:
-        # If tegrastats prints a header or initial line, just consume it; every subsequent line is a sample
         while not stop_event.is_set():
             line = proc.stdout.readline()
             if not line:
-                # process ended or EOF
                 break
-            wall_ts = time.time()
-            # remove trailing newline
             txt = line.strip()
             if not txt:
                 continue
+            wall_ts = time.time()
 
-            # Split by commas (tegrastats is comma separated)
-            tokens = [t.strip() for t in txt.split(',') if t.strip()]
+            # find all power tokens
+            found = {}  # label -> power_w (first value before slash converted to W)
+            for m in power_token_re.finditer(txt):
+                label = m.group(1)
+                val1 = m.group(2)
+                unit1 = (m.group(3) or '').lower()
+                try:
+                    v = float(val1)
+                except Exception:
+                    continue
+                power_w = v / 1000.0 if unit1 == 'mw' else v
+                # store first-seen (instantaneous) reading for that label
+                if label not in found:
+                    found[label] = power_w
 
-            # Collect all found power tokens (label, power_w)
-            found = []  # list of (label, power_w)
-            for tok in tokens:
-                # try to find a value with unit
-                m = power_re.search(tok)
-                if m:
-                    val = float(m.group(1))
-                    unit = m.group(2).lower()
-                    power_w = val / 1000.0 if unit == 'mw' else val
-                    # attempt to extract a label from token (common labels: POM_5V_IN, VDD_IN, VDD_GPU, etc.)
-                    # Use the first word-ish token as label
-                    lbl_match = re.match(r'([A-Za-z0-9_]+)', tok)
-                    label = lbl_match.group(1) if lbl_match else tok
-                    found.append((label, power_w))
-
-            # choose preferred power value
+            # Determine chosen power (prefer VIN_SYS_5V0 as total system input)
             chosen_power_w = None
-            if found:
-                # preference list: labels that indicate total input or VDD
-                pref_keywords = ("POM", "5V", "VDD", "IN", "VDD_IN", "POW", "SOC")
-                # try to find an explicit POM / VDD token
-                for (lbl, pw) in found:
-                    L = lbl.upper()
-                    if any(k in L for k in pref_keywords):
-                        chosen_power_w = pw
-                        break
-                # else try to find a GPU/GR3D token (some builds show GR3D power)
-                if chosen_power_w is None:
-                    for (lbl, pw) in found:
-                        L = lbl.upper()
-                        if "GPU" in L or "GR3D" in L:
+            if 'VIN_SYS_5V0' in found:
+                chosen_power_w = found['VIN_SYS_5V0']
+            else:
+                # prefer tokens with POM or VDD total-like labels
+                pref_order = ['POM', 'VIN', 'VDD', 'VDD_GPU_SOC', 'VDD_CPU', 'VDD_CPU_CV']
+                # try exact preferred labels first
+                for p in pref_order:
+                    for lbl, pw in found.items():
+                        if p in lbl.upper():
                             chosen_power_w = pw
                             break
-                # fallback: if multiple power tokens, sum them (some tegrastats shows several mW values)
+                    if chosen_power_w is not None:
+                        break
+
+                # if nothing found yet, try GPU-specific power
                 if chosen_power_w is None:
-                    if len(found) == 1:
-                        chosen_power_w = found[0][1]
+                    for lbl, pw in found.items():
+                        if 'GPU' in lbl.upper() or 'GR3D' in lbl.upper():
+                            chosen_power_w = pw
+                            break
+
+                # fallback: if multiple VDD/VIN tokens, sum them as conservative estimate
+                if chosen_power_w is None and found:
+                    # sum tokens that look like VDD/VIN or include CPU/GPU/SOC keywords
+                    sum_labels = [pw for (lbl, pw) in found.items() if any(k in lbl.upper() for k in ['VDD', 'VIN', 'CPU', 'GPU', 'SOC', 'POM'])]
+                    if sum_labels:
+                        chosen_power_w = sum(sum_labels)
                     else:
-                        # sum as conservative estimate
-                        chosen_power_w = sum(pw for (lbl, pw) in found)
+                        # final fallback: use the single/mode token (first)
+                        # this is conservative but better than nothing
+                        first_pw = next(iter(found.values()))
+                        chosen_power_w = first_pw
 
-            else:
-                # no explicit mW/W in line; skip this sample
-                chosen_power_w = None
-
-            # try to get GPU utilization percent (GR3D/GPU)
+            # GPU utilization parsing
             util_pct = None
             gm = gpu_util_re.search(txt)
             if gm:
@@ -1165,11 +1172,13 @@ def _tegrastats_sampler(interval_ms: int, samples: list, stop_event: threading.E
                 except Exception:
                     util_pct = None
             else:
-                # fallback: pick the first percentage in the line (cautious)
-                pctm = re.search(r'(\d+)%', txt)
-                if pctm:
+                # fallback: if no GR3D/GPU explicit, try any percent but be careful: many percentages are CPU core %
+                # We'll take the first percentage that occurs after 'GR3D' token if present; simple fallback: use first % in line
+                # (This may pick CPU percent; still useful as coarse indicator.)
+                anym = any_pct_re.search(txt)
+                if anym:
                     try:
-                        util_pct = float(pctm.group(1))
+                        util_pct = float(anym.group(1))
                     except Exception:
                         util_pct = None
 
