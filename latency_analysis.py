@@ -1,7 +1,7 @@
 '''
-Inference Latency Analysis on StereoSpike
+Inference Latency Analysis on StereoSpike for NVIDIA Jetson AGX Orin
 
-2025 - 08 - 11  
+2025 - 08 - 21  
 
 Andres Brito
 
@@ -21,6 +21,8 @@ import copy
 import time
 import platform
 import psutil
+import shutil
+import re
 import subprocess
 import threading
 from collections import deque
@@ -1022,6 +1024,397 @@ def performance_eval_nvidia_smi(
         "avg_valid_pixels": epoch_test_n
     }
 
+def _print_hardware_info_tegrastats(device):
+    print("=== Hardware / Environment info ===")
+    print(f"Platform: {platform.system()} {platform.release()} ({platform.machine()})")
+    try:
+        cpu_count = psutil.cpu_count(logical=False)
+        cpu_count_logical = psutil.cpu_count(logical=True)
+        print(f"CPU physical cores: {cpu_count}, logical: {cpu_count_logical}")
+    except Exception:
+        pass
+    try:
+        vm = psutil.virtual_memory()
+        print(f"RAM total: {vm.total / (1024**3):.2f} GB")
+    except Exception:
+        pass
+    print(f"Python: {platform.python_version()}")
+    print(f"PyTorch: {torch.__version__}")
+    if torch.cuda.is_available() and device is not None and getattr(device, "type", None) == 'cuda':
+        print(f"CUDA available: True, devices: {torch.cuda.device_count()}")
+        try:
+            print(f"Using device: {torch.cuda.get_device_name(device)} (id={device.index})")
+        except Exception:
+            pass
+    else:
+        print("CUDA available: False or using CPU device.")
+    # show which sampler we'll try to use
+    have_nvsmi = shutil.which("nvidia-smi") is not None
+    have_tegrastats = shutil.which("tegrastats") is not None
+    if have_tegrastats:
+        print("Detected tegrastats available: Jetson-style sampling will be used for power readings.")
+    if have_nvsmi:
+        print("Detected nvidia-smi available: nvidia-smi sampling may be used (non-Jetson).")
+    print("===================================\n")
+
+def _tegrastats_sampler(interval_ms: int, samples: list, stop_event: threading.Event):
+    """
+    Spawn a subprocess running tegrastats and append parsed samples to `samples` as tuples
+    (wall_time, power_w, util_pct). Runs until stop_event.is_set().
+
+    Heuristics:
+      - Try a few ways to invoke tegrastats (with/without --interval, with sudo).
+      - Parse tokens with 'mW' or 'W' suffix. Prefer labels like 'POM'/'VDD'/'5V' for total power.
+      - Try to extract GPU utilization from 'GR3D' or 'GPU' tokens (percent).
+    """
+    cmds_to_try = [
+        ["tegrastats", "--interval", str(interval_ms)],
+        ["tegrastats", str(interval_ms)],
+        ["sudo", "tegrastats", "--interval", str(interval_ms)],
+        ["sudo", "tegrastats", str(interval_ms)],
+    ]
+    proc = None
+    for cmd in cmds_to_try:
+        if shutil.which(cmd[0]) is None:
+            continue
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
+            break
+        except FileNotFoundError:
+            proc = None
+            continue
+        except Exception:
+            proc = None
+            continue
+
+    if proc is None:
+        # tegrastats not available or couldn't start
+        return
+
+    # helper regexes
+    power_re = re.compile(r'([0-9]+(?:\.[0-9]+)?)\s*(mW|W)\b', flags=re.IGNORECASE)
+    gpu_util_re = re.compile(r'\b(?:GR3D|GPU)\b[^,;\n]*?(\d+)%')  # try to capture 'GR3D ... 12%'
+
+    try:
+        # If tegrastats prints a header or initial line, just consume it; every subsequent line is a sample
+        while not stop_event.is_set():
+            line = proc.stdout.readline()
+            if not line:
+                # process ended or EOF
+                break
+            wall_ts = time.time()
+            # remove trailing newline
+            txt = line.strip()
+            if not txt:
+                continue
+
+            # Split by commas (tegrastats is comma separated)
+            tokens = [t.strip() for t in txt.split(',') if t.strip()]
+
+            # Collect all found power tokens (label, power_w)
+            found = []  # list of (label, power_w)
+            for tok in tokens:
+                # try to find a value with unit
+                m = power_re.search(tok)
+                if m:
+                    val = float(m.group(1))
+                    unit = m.group(2).lower()
+                    power_w = val / 1000.0 if unit == 'mw' else val
+                    # attempt to extract a label from token (common labels: POM_5V_IN, VDD_IN, VDD_GPU, etc.)
+                    # Use the first word-ish token as label
+                    lbl_match = re.match(r'([A-Za-z0-9_]+)', tok)
+                    label = lbl_match.group(1) if lbl_match else tok
+                    found.append((label, power_w))
+
+            # choose preferred power value
+            chosen_power_w = None
+            if found:
+                # preference list: labels that indicate total input or VDD
+                pref_keywords = ("POM", "5V", "VDD", "IN", "VDD_IN", "POW", "SOC")
+                # try to find an explicit POM / VDD token
+                for (lbl, pw) in found:
+                    L = lbl.upper()
+                    if any(k in L for k in pref_keywords):
+                        chosen_power_w = pw
+                        break
+                # else try to find a GPU/GR3D token (some builds show GR3D power)
+                if chosen_power_w is None:
+                    for (lbl, pw) in found:
+                        L = lbl.upper()
+                        if "GPU" in L or "GR3D" in L:
+                            chosen_power_w = pw
+                            break
+                # fallback: if multiple power tokens, sum them (some tegrastats shows several mW values)
+                if chosen_power_w is None:
+                    if len(found) == 1:
+                        chosen_power_w = found[0][1]
+                    else:
+                        # sum as conservative estimate
+                        chosen_power_w = sum(pw for (lbl, pw) in found)
+
+            else:
+                # no explicit mW/W in line; skip this sample
+                chosen_power_w = None
+
+            # try to get GPU utilization percent (GR3D/GPU)
+            util_pct = None
+            gm = gpu_util_re.search(txt)
+            if gm:
+                try:
+                    util_pct = float(gm.group(1))
+                except Exception:
+                    util_pct = None
+            else:
+                # fallback: pick the first percentage in the line (cautious)
+                pctm = re.search(r'(\d+)%', txt)
+                if pctm:
+                    try:
+                        util_pct = float(pctm.group(1))
+                    except Exception:
+                        util_pct = None
+
+            if chosen_power_w is not None:
+                samples.append((wall_ts, float(chosen_power_w), util_pct))
+    finally:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+
+def _integrate_power_trapezoid_1(samples, t_start, t_end):
+    if not samples:
+        return 0.0, None
+
+    filtered = [(ts, p) for (ts, p, u) in samples if (ts >= t_start - 0.5 and ts <= t_end + 0.5)]
+    if not filtered:
+        p_vals = [p for (ts, p, u) in samples]
+        if not p_vals:
+            return 0.0, None
+        avg_p = sum(p_vals) / len(p_vals)
+        total_energy = avg_p * (t_end - t_start)
+        return total_energy, avg_p
+
+    filtered.sort(key=lambda x: x[0])
+    times = [t for (t, p) in filtered]
+    powers = [p for (t, p) in filtered]
+
+    total_energy = 0.0
+    for i in range(len(times) - 1):
+        t0, p0 = times[i], powers[i]
+        t1, p1 = times[i+1], powers[i+1]
+        a = max(t0, t_start)
+        b = min(t1, t_end)
+        if b <= a:
+            continue
+        total_energy += 0.5 * (p0 + p1) * (b - a)
+
+    if t_start < times[0]:
+        total_energy += powers[0] * (min(times[0], t_end) - t_start)
+    if t_end > times[-1]:
+        total_energy += powers[-1] * (t_end - max(times[-1], t_start))
+
+    avg_power = total_energy / max(1e-12, (t_end - t_start))
+    return total_energy, avg_power
+
+def performance_eval_tegrastats(
+    net,
+    loss_module,
+    data_loader,
+    learned_metric='LIN',
+    pruned=False,
+    device=None,
+    warmup_batches: int = 5,
+    sample_interval_ms: int = 50,
+    enable_power_sampling: bool = True
+):
+    """
+    Performs evaluation while sampling power. Auto-detects on-device sampler:
+      - tegrastats sampler on Jetson (if tegrastats present)
+    Returns metrics dict including latency and estimated power/energy (if sampling succeeded).
+    """
+    if pruned:
+        print("\nPruned model for performance evaluation.")
+    else:
+        print("\nOriginal model for performance evaluation.")
+
+    _print_hardware_info_tegrastats(device)
+
+    samples = []           # appended tuples (wall_ts, power_w, util)
+    stop_event = threading.Event()
+    sampler_thread = None
+
+    has_tegrastats = shutil.which("tegrastats") is not None
+
+    # Decide which sampler to use. Prefer tegrastats on Jetson platforms.
+    use_tegrastats = enable_power_sampling and has_tegrastats
+
+    if use_tegrastats:
+        sampler_thread = threading.Thread(
+            target=_tegrastats_sampler,
+            args=(sample_interval_ms, samples, stop_event),
+            daemon=True
+        )
+        sampler_thread.start()
+        print(f"Started tegrastats sampler at ~{sample_interval_ms} ms interval.")
+   
+    else:
+        print("Power sampling disabled (neither tegrastats nor nvidia-smi found, or sampling disabled).")
+
+    net.to(device)
+    net.eval()
+
+    total_time = 0.0
+    total_energy = 0.0
+    total_samples = 0
+
+    inference_start_wall = None
+    inference_end_wall = None
+
+    running_test_loss = 0.0
+    running_test_MDE = 0.0
+    running_test_n = 0
+    running_test_OPA = 0.0
+
+    # Warmup
+    with torch.no_grad():
+        n_w = 0
+        for sample in data_loader:
+            init_pots, warmup_chunks_left, warmup_chunks_right, test_chunks_left, test_chunks_right, label = sample
+            warmup_chunks_left = warmup_chunks_left.to(device, dtype=torch.float)
+            warmup_chunks_right = warmup_chunks_right.to(device, dtype=torch.float)
+            test_chunks_left = test_chunks_left.to(device, dtype=torch.float)
+            test_chunks_right = test_chunks_right.to(device, dtype=torch.float)
+
+            warmup_chunks, test_chunks = net.reformat_input_data(
+                warmup_chunks_left, warmup_chunks_right, test_chunks_left, test_chunks_right
+            )
+            try:
+                functional.reset_net(net)
+            except Exception:
+                pass
+            test_evframe = (test_chunks >= 1).to(test_chunks.dtype)
+
+            _ = net(test_evframe)
+            n_w += 1
+            if n_w >= warmup_batches:
+                break
+
+    # Main evaluation loop
+    with torch.no_grad():
+        for sample in tqdm(data_loader):
+            init_pots, warmup_chunks_left, warmup_chunks_right, test_chunks_left, test_chunks_right, label = sample
+            init_pots = init_pots.to(device)
+            warmup_chunks_left = warmup_chunks_left.to(device, dtype=torch.float)
+            warmup_chunks_right = warmup_chunks_right.to(device, dtype=torch.float)
+            test_chunks_left = test_chunks_left.to(device, dtype=torch.float)
+            test_chunks_right = test_chunks_right.to(device, dtype=torch.float)
+            label = label.to(device)
+
+            warmup_chunks, test_chunks = net.reformat_input_data(
+                warmup_chunks_left, warmup_chunks_right, test_chunks_left, test_chunks_right
+            )
+            try:
+                functional.reset_net(net)
+            except Exception:
+                pass
+            test_evframe = (test_chunks >= 1).to(test_chunks.dtype)
+
+            batch_size = test_evframe.shape[0] if test_evframe.dim() >= 1 else 1
+
+            if device is not None and getattr(device, "type", None) == 'cuda':
+                torch.cuda.synchronize(device)
+            t0 = time.perf_counter()
+            if inference_start_wall is None:
+                inference_start_wall = time.time()
+
+            pred, spks = net(test_evframe)
+
+            if device is not None and getattr(device, "type", None) == 'cuda':
+                torch.cuda.synchronize(device)
+            t1 = time.perf_counter()
+
+            batch_time = t1 - t0
+            total_time += batch_time
+            total_samples += batch_size
+
+            loss = loss_module(pred, label, spks)
+            try:
+                net.detach()
+            except Exception:
+                pass
+
+            if not pruned:
+                pred = pred[0]
+
+            if learned_metric == 'LIN':
+                lin_pred = pred
+            elif learned_metric == 'LOG':
+                lin_pred = log_to_lin_depths(pred)
+            elif learned_metric == 'DISP':
+                lin_pred = disparity_to_depth(pred)
+            else:
+                lin_pred = pred
+
+            MDE, n = MeanDepthError_n(lin_pred, label)
+            pred_disp = depth_to_disparity(lin_pred)
+            gt_disp = depth_to_disparity(label)
+
+            running_test_loss += loss.item() / test_chunks_left.size(0)
+            running_test_MDE += MDE
+            running_test_n += n
+            running_test_OPA += OnePixelAccuracy(pred_disp, gt_disp)
+
+    inference_end_wall = time.time()
+
+    # Stop sampler and join
+    if (use_tegrastats) and sampler_thread is not None:
+        stop_event.set()
+        sampler_thread.join(timeout=2.0)
+        print(f"Collected {len(samples)} power samples.")
+
+        total_energy, avg_power = _integrate_power_trapezoid_1(samples, inference_start_wall, inference_end_wall)
+    else:
+        total_energy, avg_power = 0.0, None
+
+    avg_latency_s = total_time / total_samples if total_samples > 0 else 0.0
+    avg_latency_ms = avg_latency_s * 1000.0
+    throughput = total_samples / total_time if total_time > 0 else 0.0
+    energy_per_sample = (total_energy / total_samples) if (total_samples > 0 and total_energy > 0) else None
+
+    # Print summary
+    print("\n=== Inference Performance Summary ===")
+    print(f"Total samples processed: {total_samples}")
+    print(f"Total inference time (s): {total_time:.4f}")
+    print(f"Average latency per sample: {avg_latency_ms:.4f} ms")
+    print(f"Throughput: {throughput:.2f} samples/s")
+    if avg_power is not None:
+        print(f"Estimated average power during inference: {avg_power:.2f} W")
+        print(f"Estimated total energy consumed (J): {total_energy:.4f} J")
+        print(f"Estimated energy per sample (J): {energy_per_sample:.6f} J")
+    else:
+        print("Power estimation not available (no sampler detected or no power tokens found in tegrastats).")
+
+    epoch_test_loss = running_test_loss / len(data_loader)
+    epoch_test_MDE = running_test_MDE / len(data_loader)
+    epoch_test_n = running_test_n / len(data_loader)
+    epoch_test_OPA = running_test_OPA / len(data_loader)
+    print(f"\nAccuracy summary: Loss: {epoch_test_loss:.6f}, Mean Depth Error (m): {epoch_test_MDE:.6f}, One-Pixel Accuracy: {epoch_test_OPA:.6f}")
+    print(f"Average number of valid pixels in the ground truth: {epoch_test_n:0.2f}/{label.numel()}\n")
+
+    return {
+        "total_samples": total_samples,
+        "total_time_s": total_time,
+        "avg_latency_ms": avg_latency_ms,
+        "throughput_sps": throughput,
+        "total_energy_j": total_energy,
+        "avg_power_w": avg_power,
+        "energy_per_sample_j": energy_per_sample,
+        "epoch_test_loss": epoch_test_loss,
+        "epoch_test_MDE": epoch_test_MDE,
+        "epoch_test_OPA": epoch_test_OPA,
+        "avg_valid_pixels": epoch_test_n
+    }
+
 #################################################################################################################
 # Load Dataset
 #################################################################################################################
@@ -1105,8 +1498,20 @@ print('\n')
 #     warmup_batches = 5,
 #     measure_power = True
 # )
-# Try to estimaye power with NVIDIA-smi
-performance_eval_nvidia_smi(
+# # Try to estimate power with NVIDIA-smi
+# performance_eval_nvidia_smi(
+#     net=net_s_nskip,
+#     loss_module=loss_module,
+#     data_loader=test_data_loader,
+#     learned_metric='LIN',
+#     pruned=False,
+#     device=device,
+#     warmup_batches = 5,
+#     sample_interval_ms = 5,
+#     enable_power_sampling = True
+# ) 
+# Try to estimate power with tegrastats
+performance_eval_tegrastats(
     net=net_s_nskip,
     loss_module=loss_module,
     data_loader=test_data_loader,
@@ -1130,8 +1535,20 @@ performance_eval_nvidia_smi(
 #     measure_power = True
 # )
 
-# Try to estimaye power with NVIDIA-smi
-performance_eval_nvidia_smi(
+# # Try to estimaye power with NVIDIA-smi
+# performance_eval_nvidia_smi(
+#     net=net_p_s_nskip,
+#     loss_module=loss_module,
+#     data_loader=test_data_loader,
+#     learned_metric='LIN',
+#     pruned=True,
+#     device=device,
+#     warmup_batches = 5,
+#     sample_interval_ms = 2,
+#     enable_power_sampling = True
+# ) 
+# Try to estimate power with tegrastats
+performance_eval_tegrastats(
     net=net_p_s_nskip,
     loss_module=loss_module,
     data_loader=test_data_loader,
