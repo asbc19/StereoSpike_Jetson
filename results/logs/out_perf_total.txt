@@ -234,7 +234,7 @@ Average number of valid pixels in the ground truth: 77979.72/89960
 Original model for performance evaluation.
 === Hardware / Environment info ===
 Platform: Linux 5.15.148-tegra (aarch64)
-CPU physical cores: 8, logical: 8
+CPU physical cores: 8, logical: 8, freq: 1062.3999999999999 MHz
 RAM total: 29.98 GB
 Python: 3.10.18
 PyTorch: 2.5.0a0+872d972e41.nv24.08
@@ -247,7 +247,7 @@ Detected nvidia-smi available: nvidia-smi sampling may be used (non-Jetson).
 Started tegrastats sampler at ~100 ms interval.
 Collected 1750 power samples.
 
-=== Inference Performance Summary (Latency and Power (optional) with 'tegrastats') ===
+=== Inference Performance Summary === 
 Total samples processed: 860
 Total inference time (s): 138.9610
 Average latency per sample: 161.5826 ms
@@ -323,7 +323,7 @@ Detected nvidia-smi available: nvidia-smi sampling may be used (non-Jetson).
 Started tegrastats sampler at ~25 ms interval.
 Collected 2438 power samples.
 
-=== Inference Performance Summary (Latency and Power (optional) with 'tegrastats') ===
+=== Inference Performance Summary ===
 Total samples processed: 860
 Total inference time (s): 54.3059
 Average latency per sample: 63.1464 ms
