@@ -474,12 +474,11 @@ def performance_eval(
     learned_metric='LIN',
     pruned=False,
     device=device,
-    warmup_batches: int = 5,
-    measure_power: bool = True
+    warmup_batches: int = 5
 ):
     """
     Run inference over data_loader using the original model evaluation logic,
-    and measure latency and (if possible) power.
+    and measure latency.
 
     Returns a dict with metrics: average_latency_ms, samples_per_sec,
     avg_power_watts (None if not measured), energy_per_sample_joules, total_time_s, total_energy_j.
@@ -493,22 +492,6 @@ def performance_eval(
 
     # Print hardware info
     _print_hardware_info(device)
-
-    # Prepare NVML if requested and available
-    nvml_handle = None
-    if measure_power and _HAS_NVML and torch.cuda.is_available() and device.type == 'cuda':
-        try:
-            pynvml.nvmlInit()
-            # use device.index if present, else 0
-            dev_idx = device.index if device.index is not None else 0
-            nvml_handle = pynvml.nvmlDeviceGetHandleByIndex(dev_idx)
-            print("NVML initialized for power sampling.")
-        except Exception as e:
-            print("NVML init failed, skipping power measurements:", e)
-            nvml_handle = None
-    else:
-        if measure_power:
-            print("Power measurement requested but NVML unavailable or device not CUDA — power will be skipped.")
 
     # Prepare model
     net.to(device)
@@ -540,21 +523,11 @@ def performance_eval(
 
     # Now main measurement loop
     total_time = 0.0
-    total_energy_j = 0.0
     total_samples = 0
     running_test_loss = 0.0
     running_test_MDE = 0.0
     running_test_n = 0
     running_test_OPA = 0.0
-
-    # local helper to get instant power (W) from NVML handle
-    def _sample_power_watts(handle):
-        try:
-            # returns milliwatts
-            mw = pynvml.nvmlDeviceGetPowerUsage(handle)
-            return float(mw) / 1000.0
-        except Exception:
-            return None
 
     # iterate over dataset (measuring)
     with torch.no_grad():
@@ -577,9 +550,6 @@ def performance_eval(
             batch_size = test_evframe.shape[0] if test_evframe.dim() >= 1 else 1
             # print(f'Batch size: {batch_size}')
 
-            # sample power (before) if possible
-            p_before = _sample_power_watts(nvml_handle) if nvml_handle else None
-
             # start timing
             if device.type == 'cuda':
                 torch.cuda.synchronize(device)
@@ -594,20 +564,8 @@ def performance_eval(
             t1 = time.perf_counter()
             batch_time = t1 - t0
 
-            # sample power (after)
-            p_after = _sample_power_watts(nvml_handle) if nvml_handle else None
-
-            # derive batch power estimate (simple average of before/after when available)
-            if (p_before is not None) and (p_after is not None):
-                batch_power_w = 0.5 * (p_before + p_after)
-                batch_energy_j = batch_power_w * batch_time
-            else:
-                batch_power_w = None
-                batch_energy_j = 0.0  # unknown
-
             # accumulate
             total_time += batch_time
-            total_energy_j += batch_energy_j
             total_samples += batch_size
 
             # Proceed with loss and metrics exactly like your original code
@@ -651,20 +609,12 @@ def performance_eval(
     avg_latency_ms = avg_latency_s * 1000.0
     throughput_sps = total_samples / total_time if total_time > 0 else float('inf')
 
-    avg_power_w = (total_energy_j / total_time) if (total_time > 0 and total_energy_j > 0) else None
-    energy_per_sample_j = (total_energy_j / total_samples) if total_samples > 0 and total_energy_j > 0 else None
-
-    # Print results (latency, power/energy, accuracy summary)
-    print("\n=== Inference Performance Summary ===")
+    # Print results (latency, accuracy summary)
+    print("\n=== Inference Performance Summary (Latency Only) ===")
     print(f"Total samples processed: {total_samples}")
     print(f"Total inference time (s): {total_time:.4f}")
     print(f"Average latency per sample: {avg_latency_ms:.4f} ms")
     print(f"Throughput: {throughput_sps:.2f} samples/s")
-    if avg_power_w is not None:
-        print(f"Average power during inference: {avg_power_w:.2f} W")
-        print(f"Energy per sample: {energy_per_sample_j:.4f} J")
-    else:
-        print("Power not measured (NVML unavailable or not a CUDA device).")
 
     # Print accuracy summary (same as your function)
     epoch_test_loss = running_test_loss / len(data_loader)
@@ -674,22 +624,12 @@ def performance_eval(
     print(f"\nAccuracy summary: Loss: {epoch_test_loss:.6f}, Mean Depth Error (m): {epoch_test_MDE:.6f}, One-Pixel Accuracy: {epoch_test_OPA:.6f}")
     print(f"Average number of valid pixels in the ground truth: {epoch_test_n:0.2f}/{label.numel()}\n")
 
-    # Clean up NVML
-    if nvml_handle is not None:
-        try:
-            pynvml.nvmlShutdown()
-        except Exception:
-            pass
-
     # Return a dictionary of collected metrics
     return {
         "total_samples": total_samples,
         "total_time_s": total_time,
         "avg_latency_ms": avg_latency_ms,
         "throughput_sps": throughput_sps,
-        "total_energy_j": total_energy_j,
-        "avg_power_w": avg_power_w,
-        "energy_per_sample_j": energy_per_sample_j,
         "epoch_test_loss": epoch_test_loss,
         "epoch_test_MDE": epoch_test_MDE,
         "epoch_test_OPA": epoch_test_OPA,
@@ -1061,8 +1001,9 @@ def _tegrastats_sampler(interval_ms: int, samples: list, stop_event: threading.E
     """
     Robust tegrastats sampler.
 
-    - Tries plain 'tegrastats' (no args) first (works on many Jetson boards).
-    - Falls back to '--interval' and 'sudo' variants if needed.
+    - If no interval argument, Jetson will kepp a 1s interval.
+    - Better use the '--interval'
+    - 'sudo' variants is not needed.
     - Parses tokens like:
         VDD_GPU_SOC 3595mW/3595mW
         VDD_CPU_CV 399mW/399mW
@@ -1073,12 +1014,9 @@ def _tegrastats_sampler(interval_ms: int, samples: list, stop_event: threading.E
     """
     # Prefer to start tegrastats with no args (you said it works without sudo)
     cmds_to_try = [
-        ["tegrastats"],                            # preferred
-        ["tegrastats", "--interval", str(interval_ms)],  # fallback
-        ["tegrastats", str(interval_ms)],          # fallback
-        ["sudo", "tegrastats"],                    # fallback with sudo
-        ["sudo", "tegrastats", "--interval", str(interval_ms)],
-        ["sudo", "tegrastats", str(interval_ms)],
+        # ["tegrastats"],                            # every second
+        ["tegrastats", "--interval", str(interval_ms)],  # default
+        ["sudo", "tegrastats", "--interval", str(interval_ms)], # not needed
     ]
 
     proc = None
@@ -1400,7 +1338,7 @@ def performance_eval_tegrastats(
     energy_per_sample = (total_energy / total_samples) if (total_samples > 0 and total_energy > 0) else None
 
     # Print summary
-    print("\n=== Inference Performance Summary ===")
+    print("\n=== Inference Performance Summary (Latency and Power (optional) with 'tegrastats') ===")
     print(f"Total samples processed: {total_samples}")
     print(f"Total inference time (s): {total_time:.4f}")
     print(f"Average latency per sample: {avg_latency_ms:.4f} ms")
@@ -1438,8 +1376,8 @@ def performance_eval_tegrastats(
 #################################################################################################################
 
 # Load preprocessed datasets
-#test_set = torch.load('./datasets/MVSEC/data/indoor_post/test_set.pt')
-test_set = torch.load('./datasets/MVSEC/mini_data/indoor_post/mini_test_set.pt', weights_only=False)
+test_set = torch.load('./datasets/MVSEC/data/indoor_post/test_set.pt')
+# test_set = torch.load('./datasets/MVSEC/mini_data/indoor_post/mini_test_set.pt', weights_only=False)
 
 test_data_loader = torch.utils.data.DataLoader(dataset=test_set,
                                                batch_size=1,
@@ -1506,28 +1444,27 @@ print('\n')
 # Performance Evaluation
 #################################################################################################################
 #--> use final depth map (depth map 1) (accumulating results from prediction 4, 3, 2 and 1 layers)
-# performance_eval(
-#     net=net_s_nskip,
-#     loss_module=loss_module,
-#     data_loader=test_data_loader,
-#     learned_metric='LIN',
-#     pruned=False,
-#     device=device,
-#     warmup_batches = 5,
-#     measure_power = True
-# )
-# # Try to estimate power with NVIDIA-smi
-# performance_eval_nvidia_smi(
-#     net=net_s_nskip,
-#     loss_module=loss_module,
-#     data_loader=test_data_loader,
-#     learned_metric='LIN',
-#     pruned=False,
-#     device=device,
-#     warmup_batches = 5,
-#     sample_interval_ms = 5,
-#     enable_power_sampling = True
-# ) 
+# Only latency
+performance_eval(
+    net=net_s_nskip,
+    loss_module=loss_module,
+    data_loader=test_data_loader,
+    learned_metric='LIN',
+    pruned=False,
+    device=device,
+    warmup_batches = 5,
+)
+# Try to estimate latency without power sampling overhead
+performance_eval_tegrastats(
+    net=net_s_nskip,
+    loss_module=loss_module,
+    data_loader=test_data_loader,
+    learned_metric='LIN',
+    pruned=False,
+    device=device,
+    warmup_batches = 5,
+    enable_power_sampling = False
+) 
 # Try to estimate power with tegrastats
 performance_eval_tegrastats(
     net=net_s_nskip,
@@ -1537,34 +1474,33 @@ performance_eval_tegrastats(
     pruned=False,
     device=device,
     warmup_batches = 5,
-    sample_interval_ms = 5,
+    sample_interval_ms = 100,
     enable_power_sampling = True
 ) 
 
 # --> use pruned model (single depth output). This should give the same results as depth map 4 (or close to it)
-# performance_eval(
-#     net=net_p_s_nskip,
-#     loss_module=loss_module,
-#     data_loader=test_data_loader,
-#     learned_metric='LIN',
-#     pruned=True,
-#     device=device,
-#     warmup_batches = 5,
-#     measure_power = True
-# )
+# Only latency
+performance_eval(
+    net=net_p_s_nskip,
+    loss_module=loss_module,
+    data_loader=test_data_loader,
+    learned_metric='LIN',
+    pruned=True,
+    device=device,
+    warmup_batches = 5,
+)
 
-# # Try to estimaye power with NVIDIA-smi
-# performance_eval_nvidia_smi(
-#     net=net_p_s_nskip,
-#     loss_module=loss_module,
-#     data_loader=test_data_loader,
-#     learned_metric='LIN',
-#     pruned=True,
-#     device=device,
-#     warmup_batches = 5,
-#     sample_interval_ms = 2,
-#     enable_power_sampling = True
-# ) 
+# Try to estimate latency without power sampling overhead
+performance_eval_tegrastats(
+    net=net_p_s_nskip,
+    loss_module=loss_module,
+    data_loader=test_data_loader,
+    learned_metric='LIN',
+    pruned=True,
+    device=device,
+    warmup_batches = 5,
+    enable_power_sampling = False
+) 
 # Try to estimate power with tegrastats
 performance_eval_tegrastats(
     net=net_p_s_nskip,
@@ -1574,6 +1510,6 @@ performance_eval_tegrastats(
     pruned=True,
     device=device,
     warmup_batches = 5,
-    sample_interval_ms = 2,
+    sample_interval_ms = 25,
     enable_power_sampling = True
 ) 

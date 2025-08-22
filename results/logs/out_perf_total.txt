@@ -1,0 +1,337 @@
+Running on cuda:0
+
+Number of elements in Test Dataloader: 860
+
+Simplified_StereoSpike_NoSkip(
+  (surrogate_fct): ATan(alpha=2.0, spiking=True)
+  (bottom): Sequential(
+    (0): Conv2d(4, 4, kernel_size=(7, 7), stride=(1, 1), padding=(3, 3), groups=4, bias=False)
+    (1): Conv2d(4, 32, kernel_size=(1, 1), stride=(1, 1), bias=False)
+  )
+  (conv1): Sequential(
+    (0): Conv2d(32, 32, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), groups=32, bias=False)
+    (1): Conv2d(32, 64, kernel_size=(1, 1), stride=(1, 1), bias=False)
+  )
+  (conv2): Sequential(
+    (0): Conv2d(64, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), groups=64, bias=False)
+    (1): Conv2d(64, 128, kernel_size=(1, 1), stride=(1, 1), bias=False)
+  )
+  (conv3): Sequential(
+    (0): Conv2d(128, 128, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), groups=128, bias=False)
+    (1): Conv2d(128, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
+  )
+  (conv4): Sequential(
+    (0): Conv2d(256, 256, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), groups=256, bias=False)
+    (1): Conv2d(256, 512, kernel_size=(1, 1), stride=(1, 1), bias=False)
+  )
+  (bottleneck): Sequential(
+    (0): SIMPLIFIED_SeparableSEWResBlock_noskip(
+      (conv1): Sequential(
+        (0): Conv2d(512, 512, kernel_size=(7, 7), stride=(1, 1), padding=(3, 3), groups=512, bias=False)
+        (1): Conv2d(512, 512, kernel_size=(1, 1), stride=(1, 1), bias=False)
+      )
+      (conv2): Sequential(
+        (0): Conv2d(512, 512, kernel_size=(7, 7), stride=(1, 1), padding=(3, 3), groups=512, bias=False)
+        (1): Conv2d(512, 512, kernel_size=(1, 1), stride=(1, 1), bias=False)
+      )
+    )
+    (1): SIMPLIFIED_SeparableSEWResBlock_noskip(
+      (conv1): Sequential(
+        (0): Conv2d(512, 512, kernel_size=(7, 7), stride=(1, 1), padding=(3, 3), groups=512, bias=False)
+        (1): Conv2d(512, 512, kernel_size=(1, 1), stride=(1, 1), bias=False)
+      )
+      (conv2): Sequential(
+        (0): Conv2d(512, 512, kernel_size=(7, 7), stride=(1, 1), padding=(3, 3), groups=512, bias=False)
+        (1): Conv2d(512, 512, kernel_size=(1, 1), stride=(1, 1), bias=False)
+      )
+    )
+  )
+  (deconv4): Sequential(
+    (0): SeparableNNConvUpsampling(
+      (up): Sequential(
+        (0): UpsamplingNearest2d(size=(39, 50), mode='nearest')
+        (1): Conv2d(512, 512, kernel_size=(7, 7), stride=(1, 1), groups=512, bias=False)
+        (2): Conv2d(512, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
+      )
+    )
+  )
+  (deconv3): Sequential(
+    (0): SeparableNNConvUpsampling(
+      (up): Sequential(
+        (0): UpsamplingNearest2d(size=(71, 93), mode='nearest')
+        (1): Conv2d(256, 256, kernel_size=(7, 7), stride=(1, 1), groups=256, bias=False)
+        (2): Conv2d(256, 128, kernel_size=(1, 1), stride=(1, 1), bias=False)
+      )
+    )
+  )
+  (deconv2): Sequential(
+    (0): SeparableNNConvUpsampling(
+      (up): Sequential(
+        (0): UpsamplingNearest2d(size=(136, 179), mode='nearest')
+        (1): Conv2d(128, 128, kernel_size=(7, 7), stride=(1, 1), groups=128, bias=False)
+        (2): Conv2d(128, 64, kernel_size=(1, 1), stride=(1, 1), bias=False)
+      )
+    )
+  )
+  (deconv1): Sequential(
+    (0): SeparableNNConvUpsampling(
+      (up): Sequential(
+        (0): UpsamplingNearest2d(size=(266, 352), mode='nearest')
+        (1): Conv2d(64, 64, kernel_size=(7, 7), stride=(1, 1), groups=64, bias=False)
+        (2): Conv2d(64, 32, kernel_size=(1, 1), stride=(1, 1), bias=False)
+      )
+    )
+  )
+  (predict_depth4): SeparableNNConvUpsampling(
+    (up): Sequential(
+      (0): UpsamplingNearest2d(size=(266, 352), mode='nearest')
+      (1): Conv2d(256, 256, kernel_size=(7, 7), stride=(1, 1), groups=256)
+      (2): Conv2d(256, 1, kernel_size=(1, 1), stride=(1, 1))
+    )
+  )
+  (predict_depth3): SeparableNNConvUpsampling(
+    (up): Sequential(
+      (0): UpsamplingNearest2d(size=(266, 352), mode='nearest')
+      (1): Conv2d(128, 128, kernel_size=(7, 7), stride=(1, 1), groups=128)
+      (2): Conv2d(128, 1, kernel_size=(1, 1), stride=(1, 1))
+    )
+  )
+  (predict_depth2): SeparableNNConvUpsampling(
+    (up): Sequential(
+      (0): UpsamplingNearest2d(size=(266, 352), mode='nearest')
+      (1): Conv2d(64, 64, kernel_size=(7, 7), stride=(1, 1), groups=64)
+      (2): Conv2d(64, 1, kernel_size=(1, 1), stride=(1, 1))
+    )
+  )
+  (predict_depth1): SeparableNNConvUpsampling(
+    (up): Sequential(
+      (0): UpsamplingNearest2d(size=(266, 352), mode='nearest')
+      (1): Conv2d(32, 32, kernel_size=(7, 7), stride=(1, 1), groups=32)
+      (2): Conv2d(32, 1, kernel_size=(1, 1), stride=(1, 1))
+    )
+  )
+)
+Simplified Full-precision Model (No skip connections) size: 6.075729 MB
+
+Copied 24 tensors into model.
+Pruned_Simplified_StereoSpike_NoSkip(
+  (surrogate_fct): ATan(alpha=2.0, spiking=True)
+  (bottom): Sequential(
+    (0): Conv2d(4, 4, kernel_size=(7, 7), stride=(1, 1), padding=(3, 3), groups=4, bias=False)
+    (1): Conv2d(4, 32, kernel_size=(1, 1), stride=(1, 1), bias=False)
+  )
+  (conv1): Sequential(
+    (0): Conv2d(32, 32, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), groups=32, bias=False)
+    (1): Conv2d(32, 64, kernel_size=(1, 1), stride=(1, 1), bias=False)
+  )
+  (conv2): Sequential(
+    (0): Conv2d(64, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), groups=64, bias=False)
+    (1): Conv2d(64, 128, kernel_size=(1, 1), stride=(1, 1), bias=False)
+  )
+  (conv3): Sequential(
+    (0): Conv2d(128, 128, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), groups=128, bias=False)
+    (1): Conv2d(128, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
+  )
+  (conv4): Sequential(
+    (0): Conv2d(256, 256, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), groups=256, bias=False)
+    (1): Conv2d(256, 512, kernel_size=(1, 1), stride=(1, 1), bias=False)
+  )
+  (bottleneck): Sequential(
+    (0): SIMPLIFIED_SeparableSEWResBlock_noskip(
+      (conv1): Sequential(
+        (0): Conv2d(512, 512, kernel_size=(7, 7), stride=(1, 1), padding=(3, 3), groups=512, bias=False)
+        (1): Conv2d(512, 512, kernel_size=(1, 1), stride=(1, 1), bias=False)
+      )
+      (conv2): Sequential(
+        (0): Conv2d(512, 512, kernel_size=(7, 7), stride=(1, 1), padding=(3, 3), groups=512, bias=False)
+        (1): Conv2d(512, 512, kernel_size=(1, 1), stride=(1, 1), bias=False)
+      )
+    )
+    (1): SIMPLIFIED_SeparableSEWResBlock_noskip(
+      (conv1): Sequential(
+        (0): Conv2d(512, 512, kernel_size=(7, 7), stride=(1, 1), padding=(3, 3), groups=512, bias=False)
+        (1): Conv2d(512, 512, kernel_size=(1, 1), stride=(1, 1), bias=False)
+      )
+      (conv2): Sequential(
+        (0): Conv2d(512, 512, kernel_size=(7, 7), stride=(1, 1), padding=(3, 3), groups=512, bias=False)
+        (1): Conv2d(512, 512, kernel_size=(1, 1), stride=(1, 1), bias=False)
+      )
+    )
+  )
+  (deconv4): Sequential(
+    (0): SeparableNNConvUpsampling(
+      (up): Sequential(
+        (0): UpsamplingNearest2d(size=(39, 50), mode='nearest')
+        (1): Conv2d(512, 512, kernel_size=(7, 7), stride=(1, 1), groups=512, bias=False)
+        (2): Conv2d(512, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
+      )
+    )
+  )
+  (predict_depth4): SeparableNNConvUpsampling(
+    (up): Sequential(
+      (0): UpsamplingNearest2d(size=(266, 352), mode='nearest')
+      (1): Conv2d(256, 256, kernel_size=(7, 7), stride=(1, 1), groups=256)
+      (2): Conv2d(256, 1, kernel_size=(1, 1), stride=(1, 1))
+    )
+  )
+)
+Pruned Simplified Full-precision Model (No skip connections) size: 5.783344 MB
+Depth map 4 is selected for evaluation.
+Number of samples tested: 860
+Loss: 1.1138932405516158, Mean Depth Error (m): 0.168198361992836, One-Pixel Accuracy: 25.355612968289574
+Average number of valid pixels in the ground truth: 77987.34/89960
+
+
+
+Original model for performance evaluation.
+=== Hardware / Environment info ===
+Platform: Linux 5.15.148-tegra (aarch64)
+CPU physical cores: 8, logical: 8, freq: 755.1999999999999 MHz
+RAM total: 29.98 GB, available: 20.62 GB
+Python: 3.10.18
+PyTorch: 2.5.0a0+872d972e41.nv24.08
+CUDA available: True, CUDA visible devices: 1
+Using device: Orin (id=0)
+===================================
+
+
+=== Inference Performance Summary (Latency Only) ===
+Total samples processed: 860
+Total inference time (s): 141.2104
+Average latency per sample: 164.1981 ms
+Throughput: 6.09 samples/s
+
+Accuracy summary: Loss: 1.116062, Mean Depth Error (m): 0.164344, One-Pixel Accuracy: 26.468346
+Average number of valid pixels in the ground truth: 77985.59/89960
+
+
+Original model for performance evaluation.
+=== Hardware / Environment info ===
+Platform: Linux 5.15.148-tegra (aarch64)
+CPU physical cores: 8, logical: 8
+RAM total: 29.98 GB
+Python: 3.10.18
+PyTorch: 2.5.0a0+872d972e41.nv24.08
+CUDA available: True, devices: 1
+Using device: Orin (id=0)
+Detected tegrastats available: Jetson-style sampling will be used for power readings.
+Detected nvidia-smi available: nvidia-smi sampling may be used (non-Jetson).
+===================================
+
+Power sampling disabled (neither tegrastats nor nvidia-smi found, or sampling disabled).
+
+=== Inference Performance Summary (Latency and Power (optional) with 'tegrastats') ===
+Total samples processed: 860
+Total inference time (s): 139.4200
+Average latency per sample: 162.1163 ms
+Throughput: 6.17 samples/s
+Power estimation not available (no sampler detected or no power tokens found in tegrastats).
+
+Accuracy summary: Loss: 1.114567, Mean Depth Error (m): 0.163863, One-Pixel Accuracy: 26.550718
+Average number of valid pixels in the ground truth: 77979.72/89960
+
+
+Original model for performance evaluation.
+=== Hardware / Environment info ===
+Platform: Linux 5.15.148-tegra (aarch64)
+CPU physical cores: 8, logical: 8
+RAM total: 29.98 GB
+Python: 3.10.18
+PyTorch: 2.5.0a0+872d972e41.nv24.08
+CUDA available: True, devices: 1
+Using device: Orin (id=0)
+Detected tegrastats available: Jetson-style sampling will be used for power readings.
+Detected nvidia-smi available: nvidia-smi sampling may be used (non-Jetson).
+===================================
+
+Started tegrastats sampler at ~100 ms interval.
+Collected 1750 power samples.
+
+=== Inference Performance Summary (Latency and Power (optional) with 'tegrastats') ===
+Total samples processed: 860
+Total inference time (s): 138.9610
+Average latency per sample: 161.5826 ms
+Throughput: 6.19 samples/s
+Estimated average power during inference: 5.43 W
+Estimated total energy consumed (J): 1012.9180 J
+Estimated energy per sample (J): 1.177812 J
+
+Accuracy summary: Loss: 1.114589, Mean Depth Error (m): 0.163670, One-Pixel Accuracy: 26.417130
+Average number of valid pixels in the ground truth: 77971.09/89960
+
+Pruned model for performance evaluation.
+=== Hardware / Environment info ===
+Platform: Linux 5.15.148-tegra (aarch64)
+CPU physical cores: 8, logical: 8, freq: 1062.3999999999999 MHz
+RAM total: 29.98 GB, available: 20.54 GB
+Python: 3.10.18
+PyTorch: 2.5.0a0+872d972e41.nv24.08
+CUDA available: True, CUDA visible devices: 1
+Using device: Orin (id=0)
+===================================
+
+
+=== Inference Performance Summary (Latency Only) ===
+Total samples processed: 860
+Total inference time (s): 69.0729
+Average latency per sample: 80.3173 ms
+Throughput: 12.45 samples/s
+
+Accuracy summary: Loss: 0.276790, Mean Depth Error (m): 0.168491, One-Pixel Accuracy: 25.274721
+Average number of valid pixels in the ground truth: 77997.12/89960
+
+
+Pruned model for performance evaluation.
+=== Hardware / Environment info ===
+Platform: Linux 5.15.148-tegra (aarch64)
+CPU physical cores: 8, logical: 8
+RAM total: 29.98 GB
+Python: 3.10.18
+PyTorch: 2.5.0a0+872d972e41.nv24.08
+CUDA available: True, devices: 1
+Using device: Orin (id=0)
+Detected tegrastats available: Jetson-style sampling will be used for power readings.
+Detected nvidia-smi available: nvidia-smi sampling may be used (non-Jetson).
+===================================
+
+Power sampling disabled (neither tegrastats nor nvidia-smi found, or sampling disabled).
+
+=== Inference Performance Summary (Latency and Power (optional) with 'tegrastats') ===
+Total samples processed: 860
+Total inference time (s): 54.4839
+Average latency per sample: 63.3534 ms
+Throughput: 15.78 samples/s
+Power estimation not available (no sampler detected or no power tokens found in tegrastats).
+
+Accuracy summary: Loss: 0.276840, Mean Depth Error (m): 0.168645, One-Pixel Accuracy: 25.202460
+Average number of valid pixels in the ground truth: 77995.38/89960
+
+
+Pruned model for performance evaluation.
+=== Hardware / Environment info ===
+Platform: Linux 5.15.148-tegra (aarch64)
+CPU physical cores: 8, logical: 8
+RAM total: 29.98 GB
+Python: 3.10.18
+PyTorch: 2.5.0a0+872d972e41.nv24.08
+CUDA available: True, devices: 1
+Using device: Orin (id=0)
+Detected tegrastats available: Jetson-style sampling will be used for power readings.
+Detected nvidia-smi available: nvidia-smi sampling may be used (non-Jetson).
+===================================
+
+Started tegrastats sampler at ~25 ms interval.
+Collected 2438 power samples.
+
+=== Inference Performance Summary (Latency and Power (optional) with 'tegrastats') ===
+Total samples processed: 860
+Total inference time (s): 54.3059
+Average latency per sample: 63.1464 ms
+Throughput: 15.84 samples/s
+Estimated average power during inference: 5.00 W
+Estimated total energy consumed (J): 385.7858 J
+Estimated energy per sample (J): 0.448588 J
+
+Accuracy summary: Loss: 0.276582, Mean Depth Error (m): 0.167981, One-Pixel Accuracy: 25.431910
+Average number of valid pixels in the ground truth: 77988.57/89960
+
