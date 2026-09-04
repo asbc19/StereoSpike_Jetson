@@ -1,0 +1,2 @@
+model,precision,rep,passes,N,T_active_s,T_idle_s,n_samp_active,n_samp_idle,tj_active_C,tj_idle_C,GPU_SOC_P_active_W,GPU_SOC_P_idle_W,GPU_SOC_E_active_J,GPU_SOC_E_idle_J,CPU_CV_P_active_W,CPU_CV_P_idle_W,CPU_CV_E_active_J,CPU_CV_E_idle_J,SYS_5V0_P_active_W,SYS_5V0_P_idle_W,SYS_5V0_E_active_J,SYS_5V0_E_idle_J
+pruned,fp32,1,1,860,99.5078,30.028,941,285,48.32,48.08,4.796,2.9851,477.2406,89.6358,0.4028,0.399,40.0843,11.9812,5.211,4.707,518.5399,141.3418
