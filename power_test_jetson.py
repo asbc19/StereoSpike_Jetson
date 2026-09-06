@@ -72,7 +72,7 @@ torch.heaviside = _heaviside_dtype_safe
 #                    >>>  VARIABLES YOU WILL CHANGE LATER  <<<
 # ============================================================================
 # Repetitions per run. 1 now (pipeline test); set to 10 for the real measurement.
-N_REPS = 1
+N_REPS = 10
 
 # Active window length, expressed as full passes over the 860-frame pool.
 #   N (inferences) = ACTIVE_PASSES * pool_size.  1 pass ~= 2-5 min depending on model.
