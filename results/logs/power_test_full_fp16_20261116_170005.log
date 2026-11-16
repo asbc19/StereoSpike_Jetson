@@ -1,0 +1,61 @@
+StereoSpike power test - run log
+written: 2026-11-16T17:51:57
+
+===== RUN =====
+model: full
+pruned: False
+precision: fp16
+fp16_method: torch.autocast (fp16 matmul / fp32 accumulate)
+n_reps: 10
+active_passes: 1
+pool_size: 860
+N_per_rep: 860
+idle_s: 30.0
+settle_s: 5.0
+warmup_samples: 20
+csv_file: power_test_full_fp16_20261116_170005.csv
+note: dynamic = active - idle is derived at analysis time (not stored here)
+gpu_freq_MHz_start: 612.0
+gpu_freq_MHz_end: 612.0
+
+===== OPERATING POINT + STACK (read at session start) =====
+platform: Linux-5.15.148-tegra-aarch64-with-glibc2.35
+python: 3.10.18
+torch: 2.5.0a0+872d972e41.nv24.08
+torch_cuda: 12.6
+cudnn: 90300
+spikingjelly: unknown
+device: Orin
+l4t_release: # R36 (release), REVISION: 4.4, GCID: 41062509, BOARD: generic, EABI: aarch64, DATE: Mon Jun 16 16:07:13 UTC 2025
+# KERNEL_VARIANT: oot
+TARGET_USERSPACE_LIB_DIR=nvidia
+TARGET_USERSPACE_LIB_DIR_PATH=usr/lib/aarch64-linux-gnu/nvidia
+jetpack: Version: 6.2.1+b38
+nvpmodel_status_file: pmode:0002
+nvpmodel_q: NV Power Mode: MODE_30W
+2
+cpu_online: 0-7
+gpu_min_MHz: 612.0
+gpu_max_MHz: 612.0
+cpu_cur_kHz: {0: '1728000', 1: '1728000', 2: '1728000', 3: '1728000'}
+tpc_pg_mask: 240
+cudnn_benchmark: False
+tegrastats_interval_ms: 100
+
+===== SUMMARY (median +/- std over reps; GPU_SOC and SYS_5V0 only) =====
+GPU_SOC_P_active_W_median: 6.7839
+GPU_SOC_P_active_W_std: 0.0078
+GPU_SOC_P_idle_W_median: 3.617
+GPU_SOC_P_idle_W_std: 0.0129
+GPU_SOC_E_active_J_median: 839.4574
+GPU_SOC_E_active_J_std: 3.9877
+GPU_SOC_E_idle_J_median: 108.6199
+GPU_SOC_E_idle_J_std: 0.404
+SYS_5V0_P_active_W_median: 5.3226
+SYS_5V0_P_active_W_std: 0.0037
+SYS_5V0_P_idle_W_median: 4.592
+SYS_5V0_P_idle_W_std: 0.0
+SYS_5V0_E_active_J_median: 658.6224
+SYS_5V0_E_active_J_std: 4.1085
+SYS_5V0_E_idle_J_median: 137.8979
+SYS_5V0_E_idle_J_std: 0.0402
