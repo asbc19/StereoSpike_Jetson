@@ -1,0 +1,68 @@
+StereoSpike power test - run log
+written: 2026-11-19T17:16:36
+
+===== RUN =====
+model: full
+pruned: False
+precision: fp16
+fp16_method: torch.autocast (fp16 matmul / fp32 accumulate)
+n_reps: 10
+active_passes: 1
+pool_size: 860
+N_per_rep: 860
+idle_s: 30.0
+settle_s: 5.0
+warmup_samples: 20
+csv_file: power_test_full_fp16_20261119_154727.csv
+note: dynamic = active - idle is derived at analysis time (not stored here)
+latency_method: perf_counter around net(x) + cuda.synchronize, inside the active window
+gpu_freq_MHz_start: 408.0
+gpu_freq_MHz_end: 408.0
+
+===== OPERATING POINT + STACK (read at session start) =====
+platform: Linux-5.15.148-tegra-aarch64-with-glibc2.35
+python: 3.10.18
+torch: 2.5.0a0+872d972e41.nv24.08
+torch_cuda: 12.6
+cudnn: 90300
+spikingjelly: unknown
+device: Orin
+l4t_release: # R36 (release), REVISION: 4.4, GCID: 41062509, BOARD: generic, EABI: aarch64, DATE: Mon Jun 16 16:07:13 UTC 2025
+# KERNEL_VARIANT: oot
+TARGET_USERSPACE_LIB_DIR=nvidia
+TARGET_USERSPACE_LIB_DIR_PATH=usr/lib/aarch64-linux-gnu/nvidia
+jetpack: Version: 6.2.1+b38
+nvpmodel_status_file: pmode:0001
+nvpmodel_q: NV Power Mode: MODE_15W
+1
+cpu_online: 0-3
+gpu_min_MHz: 408.0
+gpu_max_MHz: 408.0
+cpu_cur_kHz: {0: '1113600', 1: '1113600', 2: '1113600', 3: '1113600'}
+tpc_pg_mask: 248
+cudnn_benchmark: False
+tegrastats_interval_ms: 100
+
+===== SUMMARY (median +/- std over reps; GPU_SOC and SYS_5V0 only) =====
+GPU_SOC_P_active_W_median: 4.7911
+GPU_SOC_P_active_W_std: 0.0006
+GPU_SOC_P_idle_W_median: 2.797
+GPU_SOC_P_idle_W_std: 0.0001
+GPU_SOC_E_active_J_median: 1158.428
+GPU_SOC_E_active_J_std: 1.4611
+GPU_SOC_E_idle_J_median: 83.9861
+GPU_SOC_E_idle_J_std: 0.0262
+SYS_5V0_P_active_W_median: 4.8985
+SYS_5V0_P_active_W_std: 0.0007
+SYS_5V0_P_idle_W_median: 4.392
+SYS_5V0_P_idle_W_std: 0.0039
+SYS_5V0_E_active_J_median: 1184.2926
+SYS_5V0_E_active_J_std: 1.5422
+SYS_5V0_E_idle_J_median: 131.8874
+SYS_5V0_E_idle_J_std: 0.1316
+latency_ms_mean_pooled: 280.4672
+latency_ms_std_pooled: 4.9543
+latency_ms_repmean_median: 280.3484
+latency_ms_repmean_std: 0.327
+T_active_over_N_ms_median: 281.1287
+T_active_over_N_ms_std: 0.3324

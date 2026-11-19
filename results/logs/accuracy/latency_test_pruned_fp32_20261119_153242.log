@@ -1,0 +1,55 @@
+StereoSpike latency/MDE test - run log
+written: 2026-11-19T15:43:10
+
+===== RUN =====
+model: pruned
+pruned: True
+precision: fp32
+fp16_method: native fp32
+full_model_depth_index: n/a
+warmup_samples_excluded: 20
+tqdm_enabled: False
+csv_write: once after the loop
+cudnn_benchmark: False
+csv_file: latency_test_pruned_fp32_20261119_153242.csv
+gpu_freq_MHz_start: 408.0
+gpu_freq_MHz_end: 408.0
+thermal_C_start: {'cpu-thermal': 48.3, 'gpu-thermal': 44.7, 'cv0-thermal': "<unavailable: can't concat NoneType to bytes>", 'cv1-thermal': "<unavailable: can't concat NoneType to bytes>", 'cv2-thermal': "<unavailable: can't concat NoneType to bytes>", 'soc0-thermal': 44.7, 'soc1-thermal': 45.4, 'soc2-thermal': 45.2, 'tj-thermal': 48.3}
+thermal_C_end: {'cpu-thermal': 48.4, 'gpu-thermal': 44.8, 'cv0-thermal': "<unavailable: can't concat NoneType to bytes>", 'cv1-thermal': "<unavailable: can't concat NoneType to bytes>", 'cv2-thermal': "<unavailable: can't concat NoneType to bytes>", 'soc0-thermal': 44.8, 'soc1-thermal': 45.7, 'soc2-thermal': 45.3, 'tj-thermal': 48.4}
+
+===== OPERATING POINT + STACK (read at session start) =====
+platform: Linux-5.15.148-tegra-aarch64-with-glibc2.35
+python: 3.10.18
+torch: 2.5.0a0+872d972e41.nv24.08
+torch_cuda: 12.6
+cudnn: 90300
+spikingjelly: unknown
+device: Orin
+l4t_release: # R36 (release), REVISION: 4.4, GCID: 41062509, BOARD: generic, EABI: aarch64, DATE: Mon Jun 16 16:07:13 UTC 2025
+# KERNEL_VARIANT: oot
+TARGET_USERSPACE_LIB_DIR=nvidia
+TARGET_USERSPACE_LIB_DIR_PATH=usr/lib/aarch64-linux-gnu/nvidia
+jetpack: Version: 6.2.1+b38
+nvpmodel_status_file: pmode:0001
+cpu_online: 0-3
+cpu_present: 0-11
+gpu_freq_MHz_at_start: 408.0
+nvpmodel_q: NV Power Mode: MODE_15W
+1
+gpu_min_MHz: 408.0
+gpu_max_MHz: 408.0
+cpu_cur_kHz: {0: '1113600', 1: '1113600', 2: '1113600', 3: '1113600'}
+tpc_pg_mask: 248
+cudnn_benchmark: False
+
+===== SUMMARY =====
+samples: 860
+latency_ms_mean: 115.747358
+latency_ms_std: 9.558013
+latency_ms_min: 113.954478
+latency_ms_max: 257.759892
+throughput_sps: 8.6395
+MDE_m_mean_of_samples: 0.168058
+MDE_m_std_of_samples: 0.045953
+MDE_m_pixel_weighted: 0.167297
+total_valid_pixels: 67054619.0
