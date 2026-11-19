@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Andres Brito
-2026-09-04
+2026-11-19
 
 Latency + Mean Depth Error (MDE) test for StereoSpike on NVIDIA Jetson AGX Orin
 
@@ -25,6 +25,20 @@ FP16 POLICY
   FP16 runs use torch.autocast (FP16 multiply / FP32 accumulate). This mirrors the
   Tensor-Core datapath and the FPGA (16-bit operands, wider accumulator), and keeps
   the SNN neuron state (membrane potentials) in FP32. We do NOT use net.half().
+
+NOTE ON LATENCY (2026-11-19)
+  - On the Jetson, PyTorch eager runs every kernel launch from the slow host
+    CPU, so host activity between inferences inflates the timed net(x) call.
+    The old version (tqdm bar + per-row CSV flush, 5 warm-up samples) showed
+    periodic slow samples locked to the 0.1 s tqdm refresh, giving a mean
+    15-25% above the back-to-back window/N.
+  - Fix: tqdm disabled (USE_TQDM), CSV written once after the loop,
+    20 warm-up samples. The periodic pattern disappears.
+  - Remaining limitation: data loading, preprocessing and MDE run between
+    timed calls and can still disturb them (e.g. sporadic slow samples
+    right after warm-up).
+  - Use this script for MDE only. The reported latency comes from
+    power_test_jetson.py (same window as the energy).
 
 RUN
         python latency_mde_jetson.py
@@ -75,9 +89,10 @@ torch.heaviside = _heaviside_dtype_safe
 # ----------------------------------------------------------------------------
 PRETRAINED_CKPT_PATH = './results/checkpoints/simplified_stereospike_NoSkip.pth'
 TEST_SET_PATH        = './datasets/MVSEC/data/indoor_post/test_set.pt'
-LOG_DIR              = './results/logs'          # all outputs live here
+LOG_DIR              = './results/logs/accuracy'          # all outputs live here
 
-WARMUP_SAMPLES = 5      # untimed inferences before the measured pass (excluded)
+WARMUP_SAMPLES = 20     # untimed inferences before the measured pass (excluded)
+USE_TQDM       = False  # A/B switch: progress bar off to avoid host contention
 SEED           = 42     # reproducibility
 
 # Which depth map is the FULL model's reported output.
@@ -309,13 +324,14 @@ def run_latency_test(net, model_name, is_pruned, precision,
     start_gpu_freq = read_gpu_freq_mhz()
 
     # --- Measured pass over the WHOLE test set (batch=1, single-stream) ---
-    times_ms, mde_list, n_list = [], [], []
+    times_ms, mde_list, n_list, rows = [], [], [], []
     with open(csv_path, 'w', newline='') as fcsv:
         writer = csv.writer(fcsv)
         writer.writerow(["sample_index", "inference_time_ms", "MDE_m", "valid_pixels_n"])
 
         with torch.no_grad():
-            for idx, sample in enumerate(tqdm(test_loader, desc=f"{model_name}/{precision}")):
+            for idx, sample in enumerate(tqdm(test_loader, desc=f"{model_name}/{precision}",
+                                                disable=not USE_TQDM)):
                 x, label = prepare_input(net, sample, device)   # data prep (not timed)
                 functional.reset_net(net)                        # reset (not timed)
 
@@ -335,9 +351,9 @@ def run_latency_test(net, model_name, is_pruned, precision,
                 MDE, n = MeanDepthError_n(lin_pred, label)
                 mde_v, n_v = float(MDE), float(n)
 
-                writer.writerow([idx, f"{dt_ms:.6f}", f"{mde_v:.6f}", f"{n_v:.1f}"])
-                fcsv.flush()                                    # crash-safe raw data
+                rows.append([idx, f"{dt_ms:.6f}", f"{mde_v:.6f}", f"{n_v:.1f}"])  # no I/O in the loop
                 times_ms.append(dt_ms); mde_list.append(mde_v); n_list.append(n_v)
+        writer.writerows(rows)                                  # written once, after the loop
 
     # --- Thermal guard: state right after the measured pass ---
     end_temps = read_thermal_zones()
@@ -365,6 +381,7 @@ def run_latency_test(net, model_name, is_pruned, precision,
         "fp16_method": "torch.autocast (fp16 matmul / fp32 accumulate)" if use_fp16 else "native fp32",
         "full_model_depth_index": FULL_MODEL_DEPTH_INDEX if not is_pruned else "n/a",
         "warmup_samples_excluded": WARMUP_SAMPLES,
+        "tqdm_enabled": USE_TQDM, "csv_write": "once after the loop",
         "cudnn_benchmark": torch.backends.cudnn.benchmark,
         "csv_file": os.path.basename(csv_path),
         # thermal guard: confirms the clock held and shows any heating across the pass
@@ -373,9 +390,12 @@ def run_latency_test(net, model_name, is_pruned, precision,
     }
 
     write_log(log_path, manifest, run_info, summary)
+    # print(f"    latency {summary['latency_ms_mean']:.3f} +/- {summary['latency_ms_std']:.3f} ms | "
+    #       f"MDE(px-weighted) {summary['MDE_m_pixel_weighted']} m | "
+    #       f"GPU {start_gpu_freq}->{end_gpu_freq} MHz")
     print(f"    latency {summary['latency_ms_mean']:.3f} +/- {summary['latency_ms_std']:.3f} ms | "
-          f"MDE(px-weighted) {summary['MDE_m_pixel_weighted']} m | "
-          f"GPU {start_gpu_freq}->{end_gpu_freq} MHz")
+        f"MDE(mean of samples) {summary['MDE_m_mean_of_samples']} m | "
+        f"GPU {start_gpu_freq}->{end_gpu_freq} MHz")
     if start_gpu_freq != end_gpu_freq:
         print("    [!] GPU frequency changed during the pass -> possible throttling, check the log.")
 

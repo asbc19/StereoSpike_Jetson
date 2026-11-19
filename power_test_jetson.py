@@ -2,6 +2,7 @@
 """
 Power test for StereoSpike on NVIDIA Jetson AGX Orin  (per-rail, raw logging)
 Andres Brito
+2026-11-19
 
 WHAT THIS SCRIPT DOES
   - Preloads the WHOLE test set (860 binarized frames) onto the GPU ONCE as a fixed
@@ -27,6 +28,21 @@ OUTPUT (per run, in ./results/logs, sharing one timestamp stem):
 
 OPERATING POINT (set OUTSIDE this script, before running):
     sudo nvpmodel -m 1 && sudo jetson_clocks        # MODE_15W, clocks locked
+
+LATENCY (added 2026-11-19)
+  - Each inference in the ACTIVE window is also timed: perf_counter around
+    net(x) + cuda.synchronize. Inputs are already on the GPU, so only compute
+    is timed (comparable to the FPGA on-board timer).
+  - Per rep: lat_mean/std/min_ms and T_active_over_N_ms. Summary: pooled mean
+    over all N_REPS x N inferences (value used in the paper), median of the
+    rep means, and T/N.
+  - Check: lat_mean must be at or just below T/N (~1% gap = Python loop,
+    reset_net and autocast overhead between timed calls).
+  - Assumptions: single stream, batch 1, synchronize after each inference
+    (no CPU/GPU overlap), so latency = 1/throughput minus loop overhead.
+    tegrastats runs in the background, so its small CPU load is included.
+  - Latency and energy come from the same window -> consistent EDP.
+    Report the mean (not the median), since energy averages the whole window.
 
 RUN:
     python power_test_jetson.py
@@ -102,7 +118,7 @@ RUN_MATRIX = [
 # ----------------------------------------------------------------------------
 PRETRAINED_CKPT_PATH = './results/checkpoints/simplified_stereospike_NoSkip.pth'
 TEST_SET_PATH        = './datasets/MVSEC/data/indoor_post/test_set.pt'
-LOG_DIR              = './results/logs'
+LOG_DIR              = './results/logs/power'
 
 TEGRASTATS_INTERVAL_MS = 100    # tegrastats polling period (fine; the mean is time-weighted)
 POOL_SIZE              = 860     # frames to preload (full test set)
@@ -302,20 +318,24 @@ def _autocast_ctx(use_fp16):
             if use_fp16 else contextlib.nullcontext())
 
 def run_active_window(net, pool, passes, use_fp16, device):
-    """Run the pool back-to-back, single-stream, for `passes` full passes. Returns (N, t0, t1)."""
+    """Run the pool back-to-back, single-stream, for `passes` full passes.
+    Returns (N, t0, t1, lat_ms), lat_ms = per-inference time of net(x) + synchronize."""
     torch.cuda.synchronize(device)
+    lat_ms = []
     t0 = time.time()
     n = 0
     with torch.no_grad():
         for _ in range(passes):
             for x in pool:
                 functional.reset_net(net)          # no-op for this feedforward CNN; kept for parity
+                s0 = time.perf_counter()           # GPU already idle (synchronized below)
                 with _autocast_ctx(use_fp16):
                     _ = net(x)
                 torch.cuda.synchronize(device)     # single-stream: finish before the next
+                lat_ms.append((time.perf_counter() - s0) * 1e3)
                 n += 1
     t1 = time.time()
-    return n, t0, t1
+    return n, t0, t1, lat_ms
 
 def measure_idle(idle_s, settle_s, device):
     """GPU quiet, warm, matched state. Returns (t0, t1) of the measured idle window."""
@@ -348,7 +368,8 @@ def write_log(log_path, manifest, run_info, summary):
 # ----------------------------------------------------------------------------
 SHARED_COLS = ["model", "precision", "rep", "passes", "N",
                "T_active_s", "T_idle_s", "n_samp_active", "n_samp_idle",
-               "tj_active_C", "tj_idle_C"]
+               "tj_active_C", "tj_idle_C",
+               "lat_mean_ms", "lat_std_ms", "lat_min_ms", "T_active_over_N_ms"]
 
 def rail_cols():
     cols = []
@@ -387,6 +408,7 @@ def run_power_test(net, model_name, is_pruned, precision, pool, device,
     # per-rep values for the two summary rails (for median +/- spread)
     summ = {tok: {"P_active": [], "P_idle": [], "E_active": [], "E_idle": []}
             for tok in SUMMARY_RAILS}
+    lat_all, lat_repmean, tn_rep = [], [], []     # latency from the same active windows
 
     with open(csv_path, 'w', newline='') as fcsv:
         writer = csv.DictWriter(fcsv, fieldnames=CSV_HEADER)
@@ -394,7 +416,8 @@ def run_power_test(net, model_name, is_pruned, precision, pool, device,
 
         for rep in range(1, N_REPS + 1):
             # ---- ACTIVE window ----
-            N, a0, a1 = run_active_window(net, pool, ACTIVE_PASSES, use_fp16, device)
+            N, a0, a1, lat = run_active_window(net, pool, ACTIVE_PASSES, use_fp16, device)
+            lat = np.asarray(lat)
             T_active = a1 - a0
             # ---- IDLE window (warm, matched) ----
             i0, i1 = measure_idle(IDLE_S, SETTLE_S, device)
@@ -415,7 +438,13 @@ def run_power_test(net, model_name, is_pruned, precision, pool, device,
                 "n_samp_active": act_n, "n_samp_idle": idl_n,
                 "tj_active_C": round(act_tj, 2) if act_tj is not None else "",
                 "tj_idle_C":   round(idl_tj, 2) if idl_tj is not None else "",
+                "lat_mean_ms": round(float(lat.mean()), 4),
+                "lat_std_ms":  round(float(lat.std(ddof=1)), 4),
+                "lat_min_ms":  round(float(lat.min()), 4),
+                "T_active_over_N_ms": round(T_active / N * 1e3, 4),
             }
+            lat_all.extend(lat.tolist()); lat_repmean.append(float(lat.mean()))
+            tn_rep.append(T_active / N * 1e3)
             for tok in RAIL_TOKENS:
                 s = RAIL_SHORT[tok]
                 pa = act_w.get(tok); pi = idl_w.get(tok)
@@ -433,7 +462,8 @@ def run_power_test(net, model_name, is_pruned, precision, pool, device,
             print(f"  rep {rep}: N={N}  GPU_SOC P_act={act_w.get('VDD_GPU_SOC'):.3f}W "
                   f"P_idle={idl_w.get('VDD_GPU_SOC'):.3f}W  "
                   f"T_act={T_active:.1f}s  tj_act={row['tj_active_C']}C  "
-                  f"(samp act/idle={act_n}/{idl_n})")
+                  f"(samp act/idle={act_n}/{idl_n})  "
+                  f"lat={lat.mean():.3f}+/-{lat.std(ddof=1):.3f}ms vs T/N={T_active / N * 1e3:.3f}ms")
 
     end_gpu_freq = read_gpu_freq_mhz()
 
@@ -452,6 +482,11 @@ def run_power_test(net, model_name, is_pruned, precision, pool, device,
             unit = "W" if key.startswith("P") else "J"
             summary[f"{s}_{key}_{unit}_median"] = med
             summary[f"{s}_{key}_{unit}_std"]    = sd
+    la = np.asarray(lat_all)
+    summary["latency_ms_mean_pooled"] = round(float(la.mean()), 4) if la.size else None
+    summary["latency_ms_std_pooled"]  = round(float(la.std(ddof=1)), 4) if la.size > 1 else None
+    summary["latency_ms_repmean_median"], summary["latency_ms_repmean_std"] = med_std(lat_repmean)
+    summary["T_active_over_N_ms_median"], summary["T_active_over_N_ms_std"] = med_std(tn_rep)
 
     run_info = {
         "model": model_name, "pruned": is_pruned, "precision": precision,
@@ -461,6 +496,7 @@ def run_power_test(net, model_name, is_pruned, precision, pool, device,
         "idle_s": IDLE_S, "settle_s": SETTLE_S, "warmup_samples": WARMUP_SAMPLES,
         "csv_file": os.path.basename(csv_path),
         "note": "dynamic = active - idle is derived at analysis time (not stored here)",
+        "latency_method": "perf_counter around net(x) + cuda.synchronize, inside the active window",
         "gpu_freq_MHz_start": start_gpu_freq, "gpu_freq_MHz_end": end_gpu_freq,
     }
     write_log(log_path, manifest, run_info, summary)
